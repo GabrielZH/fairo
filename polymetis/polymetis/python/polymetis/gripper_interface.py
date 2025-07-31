@@ -33,8 +33,8 @@ class GripperInterface:
         # Get metadata
         try:
             self.metadata = self.grpc_connection.GetRobotClientMetadata(EMPTY)
-        except grpc.RpcError:
-            log.warning("Metadata unavailable from server.")
+        except grpc.RpcError as e:
+            log.warning(f"Metadata unavailable from server.\n{e}")
 
         # Execute commands from cache in separate thread
         self._command_thr = threading.Thread(
@@ -75,13 +75,32 @@ class GripperInterface:
             force: Maximum force the gripper will exert
         """
         cmd = polymetis_pb2.GripperCommand(
-            width=width, speed=speed, force=force, grasp=False
+            width=width, speed=speed, force=force, grasp=False, stop=False
         )
         cmd.timestamp.GetCurrentTime()
 
         self._send_gripper_command(
             self.grpc_connection.Goto,
             cmd,
+            blocking=blocking,
+        )
+
+    def stop(self, blocking: bool = True):
+        """Stop the previous command (grasp, goto) from executing
+        
+        If you call grasp or goto but the robot controller cannot move the gripper 
+        to the desired width due to objects, the gripper controller will stop 
+        executing future commands. Call this method to get it unstuck in previous
+        command, and instead execute future commands.
+        """
+        cmd = polymetis_pb2.GripperCommand(
+            width=0., speed=0., force=0., grasp=False, stop=True
+        )
+        cmd.timestamp.GetCurrentTime()
+
+        self._send_gripper_command(
+            self.grpc_connection.Goto, 
+            cmd, 
             blocking=blocking,
         )
 
@@ -118,6 +137,7 @@ class GripperInterface:
             grasp=True,
             epsilon_inner=epsilon_inner,
             epsilon_outer=epsilon_outer,
+            stop=False
         )
         cmd.timestamp.GetCurrentTime()
 

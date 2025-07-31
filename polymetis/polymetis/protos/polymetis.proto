@@ -80,6 +80,7 @@ message GripperCommand {
     bool grasp = 5;
     float epsilon_inner = 6;
     float epsilon_outer = 7;
+    bool stop = 8;
 }
 
 message GripperState {
@@ -133,6 +134,9 @@ message RobotState {
   float prev_controller_latency_ms = 10;                  //Latency of previous ControlUpdate call
   bool prev_command_successful = 11;                      //Whether previous command packet is successfully transmitted
   int32 error_code = 12;
+  repeated double o_f_ext_hat_k = 13;                     //External wrench estimate (force/torque) in base frame. [N, N, N, Nm, Nm, Nm]
+  repeated double o_dp_ee_c = 14;                         //TCP velocity in base frame. [m/s, m/s, m/s, rad/s, rad/s, rad/s]
+  repeated double o_t_ee = 15;                            //CP pose in base frame (4x4 transformation matrix, column-major) 16 elements
 }
 
 message TorqueCommand {

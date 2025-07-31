@@ -340,7 +340,7 @@ class RobotInterface(BaseRobotInterface):
 
     def __init__(
         self,
-        time_to_go_default: float = 1.0,
+        time_to_go_default: float = 2.0,
         use_grav_comp: bool = True,
         *args,
         **kwargs,
@@ -425,6 +425,71 @@ class RobotInterface(BaseRobotInterface):
 
     def get_joint_velocities(self) -> torch.Tensor:
         return torch.Tensor(self.get_robot_state().joint_velocities)
+
+    # In polymetis/python/polymetis/robot_interface.py
+    # Add methods to access the new data:
+
+    def get_external_wrench(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Get external wrench estimate (force, torque) in base frame.
+        
+        Returns:
+            force: (3,) tensor in Newtons
+            torque: (3,) tensor in Newton-meters
+        """
+        robot_state = self.get_robot_state()
+        
+        if hasattr(robot_state, 'o_f_ext_hat_k') and len(robot_state.o_f_ext_hat_k) == 6:
+            wrench = torch.tensor(robot_state.o_f_ext_hat_k, dtype=torch.float32)
+            force = wrench[:3]
+            torque = wrench[3:]
+            return force, torque
+        else:
+            raise NotImplementedError(
+                "External wrench data not available. "
+                "Ensure you're using modified Polymetis with force data support."
+            )
+
+    def get_tcp_velocity(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Get TCP velocity in base frame.
+        
+        Returns:
+            linear_velocity: (3,) tensor in m/s
+            angular_velocity: (3,) tensor in rad/s
+        """
+        robot_state = self.get_robot_state()
+        
+        if hasattr(robot_state, 'o_dp_ee_c') and len(robot_state.o_dp_ee_c) == 6:
+            velocity = torch.tensor(robot_state.o_dp_ee_c, dtype=torch.float32)
+            return velocity[:3], velocity[3:]
+        else:
+            raise NotImplementedError("TCP velocity data not available.")
+
+    def get_tcp_pose(self) -> torch.Tensor:
+        """Get TCP pose as 4x4 transformation matrix in base frame.
+        
+        Returns:
+            (4, 4) transformation matrix
+        """
+        robot_state = self.get_robot_state()
+        
+        if hasattr(robot_state, 'o_t_ee') and len(robot_state.o_t_ee) == 16:
+            # Convert from column-major to row-major
+            return torch.tensor(robot_state.o_t_ee, dtype=torch.float32).reshape(4, 4).T
+        else:
+            raise NotImplementedError("TCP pose data not available.")
+
+    def get_external_joint_torques(self) -> torch.Tensor:
+        """Get filtered external joint torques.
+        
+        Returns:
+            (7,) tensor of external torques in Nm
+        """
+        robot_state = self.get_robot_state()
+        
+        if hasattr(robot_state, 'motor_torques_external'):
+            return torch.tensor(robot_state.motor_torques_external, dtype=torch.float32)
+        else:
+            raise NotImplementedError("External joint torques not available.")
 
     """
     End-effector computation methods

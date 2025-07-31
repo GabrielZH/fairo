@@ -78,6 +78,15 @@ FrankaTorqueControlClient::FrankaTorqueControlClient(
     robot_state_.add_motor_torques_desired(0.0);
   }
 
+  //Initialize force/torque wrench and TCP state fields
+  for (int i = 0; i < 6; i++) {
+    robot_state_.add_o_f_ext_hat_k(0.0);     // Force/torque wrench
+    robot_state_.add_o_dp_ee_c(0.0);         // TCP velocity
+  }
+  for (int i = 0; i < 16; i++) {
+    robot_state_.add_o_t_ee(0.0);            // TCP pose
+  }
+
   // Parse yaml
   limit_rate_ = config["limit_rate"].as<bool>();
   lpf_cutoff_freq_ = config["lpf_cutoff_frequency"].as<double>();
@@ -242,6 +251,21 @@ void FrankaTorqueControlClient::updateServerCommand(
       }
       robot_state_.set_motor_torques_desired(i,
                                              libfranka_robot_state.tau_J_d[i]);
+    }
+
+    // Add external wrench (force/torque) - 6 values
+    for (int i = 0; i < 6; i++) {
+      robot_state_.set_o_f_ext_hat_k(i, libfranka_robot_state.O_F_ext_hat_K[i]);
+    }
+
+    // Add TCP velocity - 6 values  
+    for (int i = 0; i < 6; i++) {
+      robot_state_.set_o_dp_ee_c(i, libfranka_robot_state.O_dP_EE_c[i]);
+    }
+
+    // Add TCP pose - 16 values (4x4 transformation matrix)
+    for (int i = 0; i < 16; i++) {
+      robot_state_.set_o_t_ee(i, libfranka_robot_state.O_T_EE[i]);
     }
 
     robot_state_.set_prev_command_successful(prev_command_successful);
