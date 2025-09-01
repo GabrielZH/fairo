@@ -13,6 +13,7 @@ from omegaconf import DictConfig
 import hydra
 
 import grpc  # This requires `conda install grpcio protobuf`
+from grpc import StatusCode
 import torch
 
 import polymetis
@@ -68,19 +69,26 @@ class BaseRobotInterface:
     """
 
     def __init__(
-        self,
-        ip_address: str = "localhost",
-        port: int = 50051,
-        enforce_version=True,
-        use_mirror_sim: bool = False,
-        mirror_cfg: DictConfig = None,
-        mirror_ip: str = "",
-        mirror_port: int = -1,
-        mirror_metadata: DictConfig = None,
+            self,
+            ip_address: str = "localhost",
+            port: int = 50051,
+            enforce_version=True,
+            use_mirror_sim: bool = False,
+            mirror_cfg: DictConfig = None,
+            mirror_ip: str = "",
+            mirror_port: int = -1,
+            mirror_metadata: DictConfig = None,
     ):
         # Create connection
-        self.channel = grpc.insecure_channel(f"{ip_address}:{port}")
-        self.grpc_connection = PolymetisControllerServerStub(self.channel)
+        
+        # -- Original gRPC connection without Keepalive and expanded msg sizes
+        # self.channel = grpc.insecure_channel(f"{ip_address}:{port}")
+        # self.grpc_connection = PolymetisControllerServerStub(self.channel)
+        # ------------
+
+        # New gRPC connection with Keepalive and larger msg sizes
+        self._addr = f"{ip_address}:{port}"
+        self._mk_channel_and_stub()
 
         # Get metadata
         self.metadata = (
@@ -106,6 +114,50 @@ class BaseRobotInterface:
     def __del__(self):
         # Close connection in destructor
         self.channel.close()
+
+    def _mk_channel_and_stub(self):
+        try:
+            if hasattr(self, 'channel'):
+                self.channel.close()
+        except:
+            pass
+        # Keepalive + larger msg sizes help prevent idle TCP closures / broken pipe
+        opts = [
+            ('grpc.keepalive_time_ms', 30000),          # ping every 30s
+            ('grpc.keepalive_timeout_ms', 10000),        # 10s ping timeout
+            ('grpc.keepalive_permit_without_calls', True), # allow pings with no RPCs
+            ('grpc.http2.max_pings_without_data', 0),
+            ('grpc.max_receive_message_length', 100 * 1024 * 1024),
+            ('grpc.max_send_message_length',     100 * 1024 * 1024),
+            ('grpc.max_connection_idle_ms', 300000),  # 5 minutes
+            ('grpc.client_channel_backup_poll_interval_ms', 5000),
+            ('grpc.channel_connectivity_change_backoff_ms', 1000),
+            ('grpc.initial_reconnect_backoff_ms', 1000),
+            ('grpc.max_reconnect_backoff_ms', 30000),
+        ]
+        # Properly close old channel
+        if hasattr(self, 'channel') and self.channel is not None:
+            try:
+                self.channel.close()
+                print(f"[GRPC] Closed old channel")
+            except Exception as e:
+                print(f"[GRPC] Warning: Could not close old channel: {e}")
+        self.channel = grpc.insecure_channel(self._addr, options=opts)
+        try:
+            grpc.channel_ready_future(self.channel).result(timeout=5.0)
+            print(f"[GRPC] Channel ready at {self._addr}")
+        except grpc.FutureTimeoutError:
+            print(f"[GRPC] Warning: Channel not ready after 5s, continuing anyway")
+        self.grpc_connection = PolymetisControllerServerStub(self.channel)
+
+        self._grpc_methods = {
+            'GetRobotState': self.grpc_connection.GetRobotState,
+            'GetEpisodeInterval': self.grpc_connection.GetEpisodeInterval,
+            'SetController': self.grpc_connection.SetController,
+            'UpdateController': self.grpc_connection.UpdateController,
+            'TerminateController': self.grpc_connection.TerminateController,
+            'GetRobotStateLog': self.grpc_connection.GetRobotStateLog,
+        }
 
     @staticmethod
     def _get_msg_generator(scripted_module) -> Generator:
@@ -172,7 +224,20 @@ class BaseRobotInterface:
 
     def get_robot_state(self) -> RobotState:
         """Returns the latest RobotState."""
-        return self.grpc_connection.GetRobotState(EMPTY)
+        # return self.grpc_connection.GetRobotState(EMPTY)
+        return self._retry_once_after_reconnect(self.grpc_connection.GetRobotState, EMPTY)
+
+    def stream_robot_states(self):
+        while True:
+            try:
+                for state in self.grpc_connection.StreamRobotStates(EMPTY):
+                    yield state
+            except grpc.RpcError as e:
+                if e.code() == grpc.StatusCode.UNAVAILABLE:
+                    time.sleep(0.1)
+                    self._mk_channel_and_stub()
+                    continue
+                raise
 
     def get_previous_interval(self, timeout: float = None) -> LogInterval:
         """Get the log indices associated with the currently running policy."""
@@ -324,6 +389,31 @@ class BaseRobotInterface:
         self.mirror_sim_client.kill_run()
         self.mirror_sim_robot = None
 
+    def _retry_once_after_reconnect(self, fn, *args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except grpc.RpcError as e:
+            # Transient transport errors: rebuild channel & retry once
+            if e.code() in (StatusCode.UNAVAILABLE, StatusCode.INTERNAL):
+                print(f"[GRPC] Connection lost, attempting reconnection...")
+                method_path = None
+                if hasattr(fn, '_method'):
+                    method_path = fn._method  # This is bytes like b'/polymetis.PolymetisControllerServer/GetRobotState'
+                    print(f"[GRPC] Method path: {method_path}")
+                
+                # Rebuild connection
+                self._mk_channel_and_stub()
+                
+                # Map the method path to the new stub's method
+                if method_path == b'/polymetis.PolymetisControllerServer/GetRobotState':
+                    return self.grpc_connection.GetRobotState(*args, **kwargs)
+                elif method_path == b'/polymetis.PolymetisControllerServer/GetEpisodeInterval':
+                    return self.grpc_connection.GetEpisodeInterval(*args, **kwargs)
+                # ... handle other methods ...
+                else:
+                    raise RuntimeError(f"Cannot retry method {method_path} after reconnection")
+            raise
+
 
 class RobotInterface(BaseRobotInterface):
     """
@@ -430,6 +520,7 @@ class RobotInterface(BaseRobotInterface):
     # Add methods to access the new data:
 
     def get_external_wrench(self) -> Tuple[torch.Tensor, torch.Tensor]:
+
         """Get external wrench estimate (force, torque) in base frame.
         
         Returns:
