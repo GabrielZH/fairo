@@ -405,13 +405,25 @@ class BaseRobotInterface:
                 self._mk_channel_and_stub()
                 
                 # Map the method path to the new stub's method
-                if method_path == b'/polymetis.PolymetisControllerServer/GetRobotState':
-                    return self.grpc_connection.GetRobotState(*args, **kwargs)
-                elif method_path == b'/polymetis.PolymetisControllerServer/GetEpisodeInterval':
-                    return self.grpc_connection.GetEpisodeInterval(*args, **kwargs)
-                # ... handle other methods ...
-                else:
-                    raise RuntimeError(f"Cannot retry method {method_path} after reconnection")
+                # if method_path == b'/polymetis.PolymetisControllerServer/GetRobotState':
+                #     return self.grpc_connection.GetRobotState(*args, **kwargs)
+                # elif method_path == b'/polymetis.PolymetisControllerServer/GetEpisodeInterval':
+                #     return self.grpc_connection.GetEpisodeInterval(*args, **kwargs)
+                # # ... handle other methods ...
+                # else:
+                #     raise RuntimeError(f"Cannot retry method {method_path} after reconnection")
+                
+                if isinstance(method_path, (bytes, str)):
+                    if isinstance(method_path, bytes):
+                        method_path = method_path.decode('utf-8', 'ignore')
+                    method_name = method_path.rsplit('/', 1)[-1]
+                    try:
+                        return getattr(self.grpc_connection, method_name)(*args, **kwargs)
+                    except AttributeError:
+                        pass
+
+                return fn(*args, **kwargs)
+
             raise
 
 
