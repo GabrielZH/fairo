@@ -222,17 +222,10 @@ class BaseRobotInterface:
             atexit.unregister(cancel_rpc)
             return results
 
-    def get_robot_state(self, deadline_s: float = None) -> RobotState:
-        """
-        Returns the latest RobotState. If deadline_s is provided, it is passed
-        to the underlying gRPC call as a timeout to avoid long blocking.
-        """
+    def get_robot_state(self) -> RobotState:
+        """Returns the latest RobotState."""
         # return self.grpc_connection.GetRobotState(EMPTY)
-        # return self._retry_once_after_reconnect(self.grpc_connection.GetRobotState, EMPTY)
-        call = lambda: self.grpc_connection.GetRobotState(EMPTY, timeout=deadline_s) \
-                       if deadline_s is not None else \
-                       self.grpc_connection.GetRobotState(EMPTY)
-        return self._retry_once_after_reconnect(call)
+        return self._retry_once_after_reconnect(self.grpc_connection.GetRobotState, EMPTY)
 
     def stream_robot_states(self):
         while True:
